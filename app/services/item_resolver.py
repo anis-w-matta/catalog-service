@@ -15,12 +15,6 @@ from app.services.normalization import (COLOR_WORDS, SIZE_SYNONYMS,
 
 TIE_EPSILON = settings.resolver_tie_epsilon
 
-_expand_size_synonyms = expand_size_synonyms
-_normalize_size = normalize_size
-_normalize_color = normalize_color
-_SIZE_WORDS = SIZE_WORDS
-_COLOR_WORDS = COLOR_WORDS
-
 
 def _escape_ilike(value: str) -> str:
     """Escape ILIKE wildcard metacharacters so a literal transcript string
@@ -36,7 +30,7 @@ def _letter_bounded(desc_lower: str, token: str) -> bool:
 
 
 def _desc_size(desc_lower: str) -> str | None:
-    for token in _SIZE_WORDS:
+    for token in SIZE_WORDS:
         if _letter_bounded(desc_lower, token.lower()):
             return token
     for word, abbrev in SIZE_SYNONYMS.items():
@@ -46,7 +40,7 @@ def _desc_size(desc_lower: str) -> str | None:
 
 
 def _desc_color(desc_lower: str) -> str | None:
-    for token in _COLOR_WORDS:
+    for token in COLOR_WORDS:
         if _letter_bounded(desc_lower, token.lower()):
             return token
     return None
@@ -69,13 +63,13 @@ def _attribute_conflict(item_desc: str, attributes: dict | None,
     desc_lower = item_desc.lower()
 
     if attributes:
-        wanted_size = _normalize_size(attributes.get("size"))
+        wanted_size = normalize_size(attributes.get("size"))
         if wanted_size:
             got_size = _desc_size(desc_lower)
             if got_size and got_size != wanted_size:
                 return True, f"size {got_size} != requested {wanted_size}"
 
-        wanted_color = _normalize_color(attributes.get("color"))
+        wanted_color = normalize_color(attributes.get("color"))
         if wanted_color:
             got_color = _desc_color(desc_lower)
             if got_color and got_color != wanted_color:
@@ -190,7 +184,7 @@ class ItemResolver:
                                MatchMethod.exact.value) for it in desc_matches]
             return _exact(cands)
 
-        q_fuzzy = _expand_size_synonyms(normalize_text(q))
+        q_fuzzy = expand_size_synonyms(normalize_text(q))
         rows = self.s.execute(text("""
             SELECT i.item_number, i.item_desc, i.category,
                    similarity(i.item_desc, :q) AS score, 'fuzzy' AS method

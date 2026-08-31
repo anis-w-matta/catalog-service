@@ -10,19 +10,12 @@ UOM_SYNONYMS: dict[str, str] = {
     "packet": "PKT", "packets": "PKT", "pkt": "PKT", "pkts": "PKT",
 }
 
-_uom_value_set_cache: dict[int, set[str]] = {}
-
-
 def canonical_uom(word: str | None, table: dict[str, str] = UOM_SYNONYMS
                   ) -> str | None:
     """Case-normalize `word` to its canonical unit code via `table`."""
     if not word:
         return None
     low = word.strip().lower()
-    values = _uom_value_set_cache.get(id(table))
-    if values is None:
-        values = set(table.values())
-        _uom_value_set_cache[id(table)] = values
-    if low.upper() in values:
+    if low.upper() in set(table.values()):
         return low.upper()
     return table.get(low)
