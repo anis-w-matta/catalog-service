@@ -270,12 +270,14 @@ class RankedItemOut(BaseModel):
     category: str
     item_quantity: Decimal
     order_count: int
+    customer_count: int
 
 
 class CategorySummaryOut(BaseModel):
     category: str
     item_quantity: Decimal
     order_count: int
+    customer_count: int
     share_of_total_quantity: Decimal | None = None
 
 
@@ -302,6 +304,7 @@ class ItemDetailSummaryOut(BaseModel):
     category: str
     item_quantity: Decimal
     order_count: int
+    customer_count: int
     avg_qty_per_occurrence: Decimal | None = None
 
 

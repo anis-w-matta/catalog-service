@@ -364,20 +364,25 @@ class RankedItem:
     category: str
     item_quantity: Decimal
     order_count: int
+    customer_count: int
 
 
 def top_items(session: Session, f: OrdersFilter, order_by: str,
               limit: int) -> list[RankedItem]:
     """order_by: "quantity" (sum of qty) or "order_frequency" (distinct
-    orders containing the item) - two separate rankings."""
+    orders containing the item) - two separate rankings. customer_count
+    (Phase 9 "customer penetration") is a third, always-included column,
+    never a rankable metric of its own here - see item_penetration_rank
+    below for that."""
     sub = _details_query(f).subquery()
     qty_metric = func.coalesce(func.sum(sub.c.qty), 0)
     order_metric = func.count(func.distinct(_order_id_concat(sub)))
+    customer_metric = func.count(func.distinct(sub.c.cust_nb))
     rank_col = qty_metric if order_by == "quantity" else order_metric
 
     rows = session.execute(
         select(sub.c.item_nb, Item.item_desc, Item.category, qty_metric,
-              order_metric)
+              order_metric, customer_metric)
         .select_from(sub)
         .join(Item, Item.item_number == sub.c.item_nb)
         .group_by(sub.c.item_nb, Item.item_desc, Item.category)
@@ -385,7 +390,8 @@ def top_items(session: Session, f: OrdersFilter, order_by: str,
         .limit(limit)
     ).all()
     return [RankedItem(item_nb=r[0], item_desc=r[1], category=r[2],
-                       item_quantity=Decimal(r[3]), order_count=r[4])
+                       item_quantity=Decimal(r[3]), order_count=r[4],
+                       customer_count=r[5])
            for r in rows]
 
 
@@ -394,6 +400,7 @@ class CategorySummary:
     category: str
     item_quantity: Decimal
     order_count: int
+    customer_count: int
     share_of_total_quantity: Decimal | None
 
 
@@ -401,9 +408,10 @@ def categories_summary(session: Session, f: OrdersFilter) -> list[CategorySummar
     sub = _details_query(f).subquery()
     qty_metric = func.coalesce(func.sum(sub.c.qty), 0)
     order_metric = func.count(func.distinct(_order_id_concat(sub)))
+    customer_metric = func.count(func.distinct(sub.c.cust_nb))
 
     rows = session.execute(
-        select(Item.category, qty_metric, order_metric)
+        select(Item.category, qty_metric, order_metric, customer_metric)
         .select_from(sub)
         .join(Item, Item.item_number == sub.c.item_nb)
         .group_by(Item.category)
@@ -413,6 +421,7 @@ def categories_summary(session: Session, f: OrdersFilter) -> list[CategorySummar
     return [
         CategorySummary(
             category=r[0], item_quantity=Decimal(r[1]), order_count=r[2],
+            customer_count=r[3],
             share_of_total_quantity=(Decimal(r[1]) / total) if total else None)
         for r in rows
     ]
@@ -471,6 +480,7 @@ class ItemDetailSummary:
     category: str
     item_quantity: Decimal
     order_count: int
+    customer_count: int
     avg_qty_per_occurrence: Decimal | None
 
 
@@ -482,10 +492,14 @@ def item_summary(session: Session, item_nb: str) -> ItemDetailSummary | None:
     order_count, line_count, item_quantity = _aggregate(
         session, _details_query(f))
     avg = (item_quantity / line_count) if line_count else None
+    sub = _details_query(f).subquery()
+    customer_count = session.scalar(
+        select(func.count(func.distinct(sub.c.cust_nb)))) or 0
     return ItemDetailSummary(
         item_nb=item.item_number, item_desc=item.item_desc,
         category=item.category, item_quantity=item_quantity,
-        order_count=order_count, avg_qty_per_occurrence=avg)
+        order_count=order_count, customer_count=customer_count,
+        avg_qty_per_occurrence=avg)
 
 
 @dataclass

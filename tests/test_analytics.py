@@ -161,6 +161,32 @@ class TestRankings:
         assert by_qty[0].item_nb == "BIGQTY"
         assert by_freq[0].item_nb == "FREQ"
 
+    def test_customer_penetration_counts_distinct_customers_not_orders(
+            self, db_session):
+        """Phase 9 'customer penetration' - two customers ordering the
+        same item twice each must count as 2, not 4."""
+        from app.models import Customer, Item
+        db_session.add_all([
+            Customer(customer_number="PEN1", customer_name="a"),
+            Customer(customer_number="PEN2", customer_name="b"),
+            Item(item_number="PENITEM", item_desc="d", category="c"),
+        ])
+        db_session.flush()
+        _order(db_session, "P0001", "PEN1", lines=[(1, "PENITEM", "1", "EACH")])
+        _order(db_session, "P0002", "PEN1", lines=[(1, "PENITEM", "1", "EACH")])
+        _order(db_session, "P0003", "PEN2", lines=[(1, "PENITEM", "1", "EACH")])
+
+        f = analytics.OrdersFilter(item_nb="PENITEM")
+        rows = analytics.top_items(db_session, f, "quantity", 10)
+        assert rows[0].order_count == 3
+        assert rows[0].customer_count == 2
+
+        item = analytics.item_summary(db_session, "PENITEM")
+        assert item.customer_count == 2
+
+        categories = analytics.categories_summary(db_session, f)
+        assert categories[0].customer_count == 2
+
 
 class TestOrdersTrend:
     def test_buckets_by_month(self, db_session, customer):

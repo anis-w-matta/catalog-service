@@ -73,9 +73,12 @@ def top_customers(order_by: str = Query("order_count",
                                         pattern="^(order_count|item_quantity)$"),
                   limit: int = Query(20, le=100), date_from: datetime | None = None,
                   date_to: datetime | None = None, salesman_id: str | None = None,
-                  s=Depends(get_db)):
+                  item_nb: str | None = None, s=Depends(get_db)):
+    # item_nb (Phase 9 Item x Customer matrix): "which customers buy this
+    # item" - the underlying query already supported item_nb via
+    # OrdersFilter; only this route parameter was missing.
     r = analytics.top_customers(
-        s, _filter(date_from, date_to, None, None, None, None, salesman_id),
+        s, _filter(date_from, date_to, None, item_nb, None, None, salesman_id),
         order_by, limit)
     return [RankedCustomerOut(**vars(x)) for x in r]
 
