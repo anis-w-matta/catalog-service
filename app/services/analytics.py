@@ -263,22 +263,32 @@ class OrdersTrendResult:
     orders_excluded_missing_commit_date: int
 
 
-def orders_trend(session: Session, f: OrdersFilter) -> OrdersTrendResult:
-    """Monthly order/line/quantity trend, bucketed by
-    order_header.committed_at (never a request timestamp - see
-    docs/audit/07_historical_attribution_risks.md). Reused fleet-wide
-    (Phase 6 Command Center) and per-salesman (Phase 7, via f.salesman_id -
-    same point-in-time ownership join as salesmen_order_metrics). Orders
-    without a committed_at can't be placed on a timeline at all and are
-    excluded (counted, not silently dropped) - always counted, even with
-    no date/salesman filter, since every point on this trend structurally
-    requires committed_at (unlike orders_summary/salesmen_order_metrics,
-    which only need it once a date/salesman filter narrows the result)."""
+_TREND_FORMATS = {"day": "YYYY-MM-DD", "month": "YYYY-MM"}
+
+
+def orders_trend(session: Session, f: OrdersFilter,
+                 granularity: str = "month") -> OrdersTrendResult:
+    """Order/line/quantity trend, bucketed by order_header.committed_at
+    (never a request timestamp - see
+    docs/audit/07_historical_attribution_risks.md). granularity: "month"
+    (default - Phase 6 Command Center, Phase 7 salesman trends) or "day"
+    (Phase 12 anomaly baselines, which need daily resolution for
+    meaningful 7-day/30-day rolling comparisons - a monthly bucket is too
+    coarse to detect a volume spike inside a single month). Reused
+    fleet-wide and per-salesman (via f.salesman_id - same point-in-time
+    ownership join as salesmen_order_metrics). Orders without a
+    committed_at can't be placed on a timeline at all and are excluded
+    (counted, not silently dropped) - always counted, even with no date/
+    salesman filter, since every point on this trend structurally requires
+    committed_at (unlike orders_summary/salesmen_order_metrics, which only
+    need it once a date/salesman filter narrows the result)."""
+    if granularity not in _TREND_FORMATS:
+        raise ValueError(f"unknown granularity {granularity!r}")
     excluded = _count_missing_commit_date(session, f)
     base = _details_query(f).where(OrderHeader.committed_at.is_not(None))
     sub = base.subquery()
-    bucket = func.to_char(func.date_trunc("month", sub.c.committed_at),
-                          "YYYY-MM").label("bucket")
+    bucket = func.to_char(func.date_trunc(granularity, sub.c.committed_at),
+                          _TREND_FORMATS[granularity]).label("bucket")
     rows = session.execute(
         select(bucket,
               func.count(func.distinct(_order_id_concat(sub))),
@@ -509,16 +519,41 @@ class DataHealth:
     orders_with_resolvable_attribution: int
     total_order_details: int
     order_details_violating_qty_constraint: int  # always 0 - see docstring
+    order_details_orphaned: int  # always 0 - FK-enforced, see docstring
+    order_details_invalid_item_ref: int
+    orders_with_no_lines: int
+    total_customers: int
+    customers_with_salesman: int
+    duplicate_order_groups: int  # narrow heuristic - see docstring
 
 
 def data_health(session: Session) -> DataHealth:
     """Completeness counts this service owns for the Data Health page
-    (Phase 9). order_details_violating_qty_constraint is always 0: the
-    Phase 2 migration added a DB CHECK constraint (qty > 0) that Postgres
-    validated against every existing row at migration time, so this isn't
-    a query result asserting honesty, it's a structural guarantee - kept
-    as an explicit field anyway so the Data Health page can say so
-    plainly rather than just omitting the concern.
+    (Phase 16). Two fields are always 0 by construction, not by query
+    result, kept explicit so the page can say so plainly rather than
+    omitting the concern:
+    - order_details_violating_qty_constraint: the Phase 2 migration added a
+      DB CHECK (qty > 0), validated against every existing row at
+      migration time.
+    - order_details_orphaned (order_details referencing a nonexistent
+      order_header): order_details.__table_args__ has a real
+      ForeignKeyConstraint to order_header - structurally impossible.
+
+    order_details_invalid_item_ref (item_nb with no matching item.item_number)
+    is a REAL query, not structural - there is no FK from order_details to
+    item, so a bad reference (e.g. a discontinued/renamed item from the
+    legacy ERP import) is genuinely possible and must be checked, not
+    assumed away.
+
+    duplicate_order_groups uses a deliberately narrow, conservative
+    heuristic: orders sharing the same (cust_nb, committed_at) to-the-
+    second timestamp - two genuinely independent commits landing at the
+    exact same instant is implausible, and same-key retried commits are
+    already prevented by commit_intent_id's unique constraint. This will
+    UNDER-count real duplicates (e.g. two ERP-imported rows for the same
+    sale a few seconds apart) rather than risk flagging legitimate
+    back-to-back orders as duplicates - the safe direction for an honesty-
+    first metric.
     """
     total_orders = session.scalar(
         select(func.count()).select_from(OrderHeader)) or 0
@@ -539,8 +574,42 @@ def data_health(session: Session) -> DataHealth:
     total_details = session.scalar(
         select(func.count()).select_from(OrderDetail)) or 0
 
+    invalid_item_ref = session.scalar(
+        select(func.count()).select_from(OrderDetail)
+        .where(~exists(select(1).where(
+            Item.item_number == OrderDetail.item_nb)))
+    ) or 0
+
+    no_lines = session.scalar(
+        select(func.count()).select_from(OrderHeader)
+        .where(~exists(select(1).where(
+            OrderDetail.order_nb == OrderHeader.order_nb,
+            OrderDetail.order_type == OrderHeader.order_type)))
+    ) or 0
+
+    total_customers = session.scalar(
+        select(func.count()).select_from(Customer)) or 0
+    customers_with_salesman = session.scalar(
+        select(func.count()).select_from(Customer)
+        .where(Customer.salesman_id.is_not(None))) or 0
+
+    dup_group_sub = (
+        select(OrderHeader.cust_nb, OrderHeader.committed_at)
+        .where(OrderHeader.committed_at.is_not(None))
+        .group_by(OrderHeader.cust_nb, OrderHeader.committed_at)
+        .having(func.count() > 1)
+    ).subquery()
+    duplicate_groups = session.scalar(
+        select(func.count()).select_from(dup_group_sub)) or 0
+
     return DataHealth(
         total_orders=total_orders, orders_with_committed_at=with_committed_at,
         orders_with_resolvable_attribution=resolvable,
+        order_details_orphaned=0,
+        order_details_invalid_item_ref=invalid_item_ref,
+        orders_with_no_lines=no_lines,
+        total_customers=total_customers,
+        customers_with_salesman=customers_with_salesman,
+        duplicate_order_groups=duplicate_groups,
         total_order_details=total_details,
         order_details_violating_qty_constraint=0)

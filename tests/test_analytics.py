@@ -7,6 +7,8 @@ customer AT COMMIT TIME, never who owns it now.
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import pytest
+
 from app.models import OrderDetail, OrderHeader
 from app.services import analytics
 
@@ -203,6 +205,26 @@ class TestOrdersTrend:
         assert by_bucket["2026-01"].item_quantity == Decimal("10")
         assert by_bucket["2026-02"].item_quantity == Decimal("4")
 
+    def test_day_granularity_for_anomaly_baselines(self, db_session, customer):
+        _order(db_session, "T0004", customer.customer_number,
+              committed_at=datetime(2026, 1, 15, tzinfo=timezone.utc),
+              lines=[(1, "I1", "10", "EACH")])
+        _order(db_session, "T0005", customer.customer_number,
+              committed_at=datetime(2026, 1, 16, tzinfo=timezone.utc),
+              lines=[(1, "I1", "4", "EACH")])
+        r = analytics.orders_trend(
+            db_session, analytics.OrdersFilter(cust_nb=customer.customer_number),
+            granularity="day")
+        by_bucket = {p.bucket: p for p in r.points}
+        assert by_bucket["2026-01-15"].item_quantity == Decimal("10")
+        assert by_bucket["2026-01-16"].item_quantity == Decimal("4")
+
+    def test_rejects_unknown_granularity(self, db_session, customer):
+        with pytest.raises(ValueError):
+            analytics.orders_trend(
+                db_session, analytics.OrdersFilter(cust_nb=customer.customer_number),
+                granularity="week")
+
     def test_excludes_orders_with_no_commit_date(self, db_session, customer):
         _order(db_session, "T0003", customer.customer_number, committed_at=None)
         r = analytics.orders_trend(
@@ -304,3 +326,46 @@ class TestDataHealth:
         r = analytics.data_health(db_session)
         assert r.total_orders >= 1
         assert r.orders_with_committed_at <= r.total_orders
+
+    def test_orphaned_details_always_zero(self, db_session):
+        # FK-enforced, not a query finding - see the docstring.
+        r = analytics.data_health(db_session)
+        assert r.order_details_orphaned == 0
+
+    def test_detects_invalid_item_reference(self, db_session, customer):
+        from app.models import OrderDetail as OD, OrderHeader as OH
+        db_session.add(OH(order_nb="DH0002", order_type="SO",
+                          cust_nb=customer.customer_number))
+        db_session.flush()
+        db_session.add(OD(order_nb="DH0002", order_type="SO", line_nb=1,
+                          item_nb="NO-SUCH-ITEM", item_desc="d",
+                          qty=Decimal("1"), uom="EACH"))
+        db_session.flush()
+        r = analytics.data_health(db_session)
+        assert r.order_details_invalid_item_ref >= 1
+
+    def test_detects_orders_with_no_lines(self, db_session, customer):
+        from app.models import OrderHeader as OH
+        db_session.add(OH(order_nb="DH0003", order_type="SO",
+                          cust_nb=customer.customer_number))
+        db_session.flush()
+        r = analytics.data_health(db_session)
+        assert r.orders_with_no_lines >= 1
+
+    def test_customers_with_salesman_completeness(self, db_session):
+        from app.models import Customer
+        db_session.add_all([
+            Customer(customer_number="DHC1", customer_name="a", salesman_id="sm_x"),
+            Customer(customer_number="DHC2", customer_name="b", salesman_id=None),
+        ])
+        db_session.flush()
+        r = analytics.data_health(db_session)
+        assert r.customers_with_salesman >= 1
+        assert r.customers_with_salesman <= r.total_customers
+
+    def test_duplicate_order_groups_narrow_heuristic(self, db_session, customer):
+        t = datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
+        _order(db_session, "DH0004", customer.customer_number, committed_at=t)
+        _order(db_session, "DH0005", customer.customer_number, committed_at=t)
+        r = analytics.data_health(db_session)
+        assert r.duplicate_order_groups >= 1

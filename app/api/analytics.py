@@ -100,10 +100,12 @@ def top_items(order_by: str = Query("quantity",
 def orders_trend(date_from: datetime | None = None, date_to: datetime | None = None,
                  cust_nb: str | None = None, item_nb: str | None = None,
                  category: str | None = None, order_type: str | None = None,
-                 salesman_id: str | None = None, s=Depends(get_db)):
+                 salesman_id: str | None = None,
+                 granularity: str = Query("month", pattern="^(day|month)$"),
+                 s=Depends(get_db)):
     r = analytics.orders_trend(
         s, _filter(date_from, date_to, cust_nb, item_nb, category,
-                  order_type, salesman_id))
+                  order_type, salesman_id), granularity)
     return OrdersTrendOut(
         points=[TrendPointOut(**vars(p)) for p in r.points],
         orders_excluded_missing_commit_date=r.orders_excluded_missing_commit_date)

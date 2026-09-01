@@ -314,3 +314,9 @@ class DataHealthOut(BaseModel):
     orders_with_resolvable_attribution: int
     total_order_details: int
     order_details_violating_qty_constraint: int
+    order_details_orphaned: int
+    order_details_invalid_item_ref: int
+    orders_with_no_lines: int
+    total_customers: int
+    customers_with_salesman: int
+    duplicate_order_groups: int
