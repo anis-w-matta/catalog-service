@@ -103,17 +103,32 @@ def _aggregate(session: Session, q) -> tuple[int, int, Decimal]:
     return order_count, line_count, Decimal(item_quantity)
 
 
-def _excluded_missing_commit_date(session: Session, f: OrdersFilter) -> int:
-    """How many orders (matching every filter except date/salesman) were
-    left out of a date- or salesman-filtered result because they have no
-    committed_at at all - zero when neither filter is active, since
-    nothing was excluded on that basis."""
-    if f.date_from is None and f.date_to is None and f.salesman_id is None:
-        return 0
+def _count_missing_commit_date(session: Session, f: OrdersFilter) -> int:
+    """How many orders (matching every structural filter - cust_nb/item_nb/
+    category/order_type - but ignoring date/salesman) have no committed_at
+    at all, unconditionally. Callers whose result is only ever date/
+    salesman-scoped in the first place (orders_trend: every point is a
+    month bucket) must use this directly rather than
+    _excluded_missing_commit_date, which suppresses the count when no
+    date/salesman filter is active - correct for a query that only
+    *optionally* cares about dates, wrong for one that structurally
+    requires committed_at on every row regardless of filters."""
     q = _details_query(f, only_missing_commit_date=True)
     sub = q.subquery()
     return session.scalar(
         select(func.count(func.distinct(_order_id_concat(sub))))) or 0
+
+
+def _excluded_missing_commit_date(session: Session, f: OrdersFilter) -> int:
+    """How many orders (matching every filter except date/salesman) were
+    left out of a date- or salesman-filtered result because they have no
+    committed_at at all - zero when neither filter is active, since
+    nothing was excluded on that basis. See _count_missing_commit_date for
+    the unconditional version, used by queries that always require
+    committed_at regardless of filters."""
+    if f.date_from is None and f.date_to is None and f.salesman_id is None:
+        return 0
+    return _count_missing_commit_date(session, f)
 
 
 @dataclass
@@ -255,9 +270,11 @@ def orders_trend(session: Session, f: OrdersFilter) -> OrdersTrendResult:
     (Phase 6 Command Center) and per-salesman (Phase 7, via f.salesman_id -
     same point-in-time ownership join as salesmen_order_metrics). Orders
     without a committed_at can't be placed on a timeline at all and are
-    excluded (counted, not silently dropped), same convention as every
-    other function here."""
-    excluded = _excluded_missing_commit_date(session, f)
+    excluded (counted, not silently dropped) - always counted, even with
+    no date/salesman filter, since every point on this trend structurally
+    requires committed_at (unlike orders_summary/salesmen_order_metrics,
+    which only need it once a date/salesman filter narrows the result)."""
+    excluded = _count_missing_commit_date(session, f)
     base = _details_query(f).where(OrderHeader.committed_at.is_not(None))
     sub = base.subquery()
     bucket = func.to_char(func.date_trunc("month", sub.c.committed_at),

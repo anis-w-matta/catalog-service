@@ -186,6 +186,21 @@ class TestOrdersTrend:
         assert r.points == []
         assert r.orders_excluded_missing_commit_date == 1
 
+    def test_reports_exclusions_even_with_no_date_or_salesman_filter(
+            self, db_session, customer):
+        """Unlike orders_summary (see
+        test_no_date_filter_does_not_report_exclusions above), every point
+        on a trend structurally requires committed_at - so an unfiltered
+        call must still report exclusions, not silently show an empty,
+        falsely-COMPLETE trend. This was a real bug: orders_trend
+        originally reused _excluded_missing_commit_date, which returns 0
+        whenever no date/salesman filter is active."""
+        _order(db_session, "T0004", customer.customer_number, committed_at=None)
+        r = analytics.orders_trend(
+            db_session, analytics.OrdersFilter(cust_nb=customer.customer_number))
+        assert r.points == []
+        assert r.orders_excluded_missing_commit_date == 1
+
     def test_attributes_by_ownership_at_commit_time(self, db_session, customer):
         from app.models import CustomerOwnershipHistory
 
