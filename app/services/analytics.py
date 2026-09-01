@@ -235,6 +235,83 @@ def salesmen_order_metrics(session: Session,
 
 
 @dataclass
+class TrendPoint:
+    bucket: str  # "YYYY-MM"
+    order_count: int
+    order_line_count: int
+    item_quantity: Decimal
+
+
+@dataclass
+class OrdersTrendResult:
+    points: list[TrendPoint]
+    orders_excluded_missing_commit_date: int
+
+
+def orders_trend(session: Session, f: OrdersFilter) -> OrdersTrendResult:
+    """Monthly order/line/quantity trend, bucketed by
+    order_header.committed_at (never a request timestamp - see
+    docs/audit/07_historical_attribution_risks.md). Reused fleet-wide
+    (Phase 6 Command Center) and per-salesman (Phase 7, via f.salesman_id -
+    same point-in-time ownership join as salesmen_order_metrics). Orders
+    without a committed_at can't be placed on a timeline at all and are
+    excluded (counted, not silently dropped), same convention as every
+    other function here."""
+    excluded = _excluded_missing_commit_date(session, f)
+    base = _details_query(f).where(OrderHeader.committed_at.is_not(None))
+    sub = base.subquery()
+    bucket = func.to_char(func.date_trunc("month", sub.c.committed_at),
+                          "YYYY-MM").label("bucket")
+    rows = session.execute(
+        select(bucket,
+              func.count(func.distinct(_order_id_concat(sub))),
+              func.count(),
+              func.coalesce(func.sum(sub.c.qty), 0))
+        .select_from(sub)
+        .group_by(bucket)
+        .order_by(bucket)
+    ).all()
+    points = [TrendPoint(bucket=r[0], order_count=r[1], order_line_count=r[2],
+                         item_quantity=Decimal(r[3])) for r in rows]
+    return OrdersTrendResult(points=points,
+                             orders_excluded_missing_commit_date=excluded)
+
+
+@dataclass
+class CustomerOrderHistoryRow:
+    order_nb: str
+    order_type: str
+    committed_at: datetime
+    item_quantity: Decimal
+    order_line_count: int
+
+
+def customer_order_history(session: Session,
+                           cust_nb: str) -> list[CustomerOrderHistoryRow]:
+    """One customer's committed orders, oldest first - the raw material
+    Phase 8's frequency/interval/activity-state classification is computed
+    from (in the BFF, not here - this function only returns real per-order
+    facts, never a derived judgment). Orders with no committed_at (legacy,
+    pre-Phase-2) are excluded: they can't be placed on a timeline, and
+    this endpoint's whole purpose is interval analysis over time - see
+    docs/audit/06_data_limitations.md."""
+    rows = session.execute(
+        select(OrderDetail.order_nb, OrderDetail.order_type,
+              OrderHeader.committed_at, func.coalesce(func.sum(OrderDetail.qty), 0),
+              func.count())
+        .select_from(OrderDetail)
+        .join(OrderHeader, (OrderDetail.order_nb == OrderHeader.order_nb) &
+              (OrderDetail.order_type == OrderHeader.order_type))
+        .where(OrderHeader.cust_nb == cust_nb, OrderHeader.committed_at.is_not(None))
+        .group_by(OrderDetail.order_nb, OrderDetail.order_type, OrderHeader.committed_at)
+        .order_by(OrderHeader.committed_at)
+    ).all()
+    return [CustomerOrderHistoryRow(order_nb=r[0], order_type=r[1],
+                                    committed_at=r[2], item_quantity=Decimal(r[3]),
+                                    order_line_count=r[4]) for r in rows]
+
+
+@dataclass
 class RankedCustomer:
     cust_nb: str
     customer_name: str

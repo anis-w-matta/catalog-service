@@ -4,11 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import get_db, require_api_key
 from app.schemas.models import (CategorySummaryOut, CustomerDetailSummaryOut,
-                                CustomersSummaryOut, DataHealthOut,
-                                HistogramBucketOut, ItemDetailSummaryOut,
-                                OrdersSummaryOut, RankedCustomerOut,
+                                CustomerOrderHistoryRowOut, CustomersSummaryOut,
+                                DataHealthOut, HistogramBucketOut,
+                                ItemDetailSummaryOut, OrdersSummaryOut,
+                                OrdersTrendOut, RankedCustomerOut,
                                 RankedItemOut, SalesmanOrderMetricsOut,
-                                SalesmenOrderMetricsOut)
+                                SalesmenOrderMetricsOut, TrendPointOut)
 from app.services import analytics
 
 router = APIRouter(prefix="/analytics", tags=["analytics"],
@@ -84,11 +85,32 @@ def top_items(order_by: str = Query("quantity",
                                     pattern="^(quantity|order_frequency)$"),
              limit: int = Query(20, le=100), date_from: datetime | None = None,
              date_to: datetime | None = None, category: str | None = None,
+             cust_nb: str | None = None,
              salesman_id: str | None = None, s=Depends(get_db)):
     r = analytics.top_items(
-        s, _filter(date_from, date_to, None, None, category, None, salesman_id),
+        s, _filter(date_from, date_to, cust_nb, None, category, None, salesman_id),
         order_by, limit)
     return [RankedItemOut(**vars(x)) for x in r]
+
+
+@router.get("/orders-trend", response_model=OrdersTrendOut)
+def orders_trend(date_from: datetime | None = None, date_to: datetime | None = None,
+                 cust_nb: str | None = None, item_nb: str | None = None,
+                 category: str | None = None, order_type: str | None = None,
+                 salesman_id: str | None = None, s=Depends(get_db)):
+    r = analytics.orders_trend(
+        s, _filter(date_from, date_to, cust_nb, item_nb, category,
+                  order_type, salesman_id))
+    return OrdersTrendOut(
+        points=[TrendPointOut(**vars(p)) for p in r.points],
+        orders_excluded_missing_commit_date=r.orders_excluded_missing_commit_date)
+
+
+@router.get("/customers/{cust_nb}/order-history",
+           response_model=list[CustomerOrderHistoryRowOut])
+def customer_order_history(cust_nb: str, s=Depends(get_db)):
+    r = analytics.customer_order_history(s, cust_nb)
+    return [CustomerOrderHistoryRowOut(**vars(x)) for x in r]
 
 
 @router.get("/categories-summary", response_model=list[CategorySummaryOut])

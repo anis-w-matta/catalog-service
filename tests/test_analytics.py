@@ -162,6 +162,76 @@ class TestRankings:
         assert by_freq[0].item_nb == "FREQ"
 
 
+class TestOrdersTrend:
+    def test_buckets_by_month(self, db_session, customer):
+        _order(db_session, "T0001", customer.customer_number,
+              committed_at=datetime(2026, 1, 15, tzinfo=timezone.utc),
+              lines=[(1, "I1", "10", "EACH")])
+        _order(db_session, "T0002", customer.customer_number,
+              committed_at=datetime(2026, 2, 3, tzinfo=timezone.utc),
+              lines=[(1, "I1", "4", "EACH")])
+        r = analytics.orders_trend(
+            db_session, analytics.OrdersFilter(cust_nb=customer.customer_number))
+        by_bucket = {p.bucket: p for p in r.points}
+        assert by_bucket["2026-01"].order_count == 1
+        assert by_bucket["2026-01"].item_quantity == Decimal("10")
+        assert by_bucket["2026-02"].item_quantity == Decimal("4")
+
+    def test_excludes_orders_with_no_commit_date(self, db_session, customer):
+        _order(db_session, "T0003", customer.customer_number, committed_at=None)
+        r = analytics.orders_trend(
+            db_session, analytics.OrdersFilter(
+                cust_nb=customer.customer_number,
+                date_from=datetime(2020, 1, 1, tzinfo=timezone.utc)))
+        assert r.points == []
+        assert r.orders_excluded_missing_commit_date == 1
+
+    def test_attributes_by_ownership_at_commit_time(self, db_session, customer):
+        from app.models import CustomerOwnershipHistory
+
+        t_a = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        t_reassign = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        db_session.add_all([
+            CustomerOwnershipHistory(
+                cust_nb=customer.customer_number, salesman_id="trend_a",
+                effective_from=t_a, effective_to=t_reassign),
+            CustomerOwnershipHistory(
+                cust_nb=customer.customer_number, salesman_id="trend_b",
+                effective_from=t_reassign, effective_to=None),
+        ])
+        db_session.flush()
+        _order(db_session, "T0010", customer.customer_number,
+              committed_at=t_a + timedelta(days=1), lines=[(1, "I1", "3", "EACH")])
+        _order(db_session, "T0011", customer.customer_number,
+              committed_at=t_reassign + timedelta(days=1), lines=[(1, "I1", "7", "EACH")])
+
+        r_a = analytics.orders_trend(
+            db_session, analytics.OrdersFilter(
+                cust_nb=customer.customer_number, salesman_id="trend_a"))
+        r_b = analytics.orders_trend(
+            db_session, analytics.OrdersFilter(
+                cust_nb=customer.customer_number, salesman_id="trend_b"))
+        assert sum(p.order_count for p in r_a.points) == 1
+        assert sum(p.order_count for p in r_b.points) == 1
+
+
+class TestCustomerOrderHistory:
+    def test_ordered_oldest_first_excludes_missing_commit_date(
+            self, db_session, customer):
+        _order(db_session, "H0100", customer.customer_number,
+              committed_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+              lines=[(1, "I1", "5", "EACH")])
+        _order(db_session, "H0099", customer.customer_number,
+              committed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+              lines=[(1, "I1", "2", "EACH"), (2, "I2", "3", "EACH")])
+        _order(db_session, "H0101", customer.customer_number, committed_at=None)
+
+        rows = analytics.customer_order_history(db_session, customer.customer_number)
+        assert [r.order_nb for r in rows] == ["H0099", "H0100"]
+        assert rows[0].item_quantity == Decimal("5")
+        assert rows[0].order_line_count == 2
+
+
 class TestCustomersSummary:
     def test_counts_assigned_and_unassigned(self, db_session):
         from app.models import Customer

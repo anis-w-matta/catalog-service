@@ -237,6 +237,26 @@ class SalesmenOrderMetricsOut(BaseModel):
     orders_excluded_missing_commit_date: int
 
 
+class TrendPointOut(BaseModel):
+    bucket: str
+    order_count: int
+    order_line_count: int
+    item_quantity: Decimal
+
+
+class OrdersTrendOut(BaseModel):
+    points: list[TrendPointOut]
+    orders_excluded_missing_commit_date: int
+
+
+class CustomerOrderHistoryRowOut(BaseModel):
+    order_nb: str
+    order_type: str
+    committed_at: datetime
+    item_quantity: Decimal
+    order_line_count: int
+
+
 class RankedCustomerOut(BaseModel):
     cust_nb: str
     customer_name: str
