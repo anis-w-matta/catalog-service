@@ -1,6 +1,8 @@
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, ForeignKeyConstraint, Numeric, String
+from sqlalchemy import (Boolean, CheckConstraint, DateTime,
+                        ForeignKeyConstraint, Numeric, String)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -19,6 +21,13 @@ class OrderHeader(Base):
     # the commit saga have one; nothing else does.
     commit_intent_id: Mapped[str | None] = mapped_column(
         String(36), unique=True, index=True)
+    # When this order was actually committed - NULL for every order that
+    # existed before this column was added (no fabricated backfill; the
+    # original order_header.created_at was dropped by an earlier migration
+    # and this is not a resurrection of it, just a fresh start). Set
+    # automatically by the DB default on insert, never by application code.
+    committed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True))
 
     lines: Mapped[list["OrderDetail"]] = relationship(
         back_populates="header", cascade="all, delete-orphan",
@@ -49,4 +58,9 @@ class OrderDetail(Base):
         ForeignKeyConstraint(
             ["order_nb", "order_type"],
             ["order_header.order_nb", "order_header.order_type"]),
+        # Nothing legitimately produces a zero/negative order-line quantity
+        # today (returns are their own order_type, not negative quantities
+        # on a sale line) - enforced at the DB level so "item quantity" can
+        # never silently include a bad row.
+        CheckConstraint("qty > 0", name="ck_order_details_qty_positive"),
     )

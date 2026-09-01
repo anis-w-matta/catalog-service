@@ -1,12 +1,13 @@
 from fastapi import FastAPI
 
-from app.api import customers, items, orders, qra
+from app.api import analytics, customers, items, orders, qra
 
 app = FastAPI(title="Vendo Catalog Service")
 app.include_router(items.router)
 app.include_router(customers.router)
 app.include_router(qra.router)
 app.include_router(orders.router)
+app.include_router(analytics.router)
 
 
 @app.get("/health")

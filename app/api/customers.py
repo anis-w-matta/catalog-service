@@ -3,10 +3,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_api_key
-from app.models import Customer
+from app.models import Customer, CustomerOwnershipHistory
 from app.schemas.models import (AssignSalesmanIn, CustomerCacheOut,
                                 CustomerCandidateOut, CustomerDetailOut,
-                                CustomerMatchOut)
+                                CustomerMatchOut, OwnershipHistoryEntryOut)
+from app.services.customer_ownership import record_ownership_change
 from app.services.match_customer import match_customer, search_customers
 
 router = APIRouter(tags=["customers"], dependencies=[Depends(require_api_key)])
@@ -127,8 +128,30 @@ def assign_salesman(cust_nb: str, body: AssignSalesmanIn,
     if c is None:
         raise HTTPException(404, f"no such customer {cust_nb!r}")
     c.salesman_id = body.salesman_id
+    record_ownership_change(s, cust_nb, body.salesman_id)
     s.flush()
     return CustomerDetailOut(
         cust_nb=c.customer_number, customer_name=c.customer_name,
         email=c.email, telephone=c.telephone, city=c.city,
         address1=c.address1, salesman_id=c.salesman_id)
+
+
+@router.get("/customers/{cust_nb}/ownership-history",
+           response_model=list[OwnershipHistoryEntryOut])
+def ownership_history(cust_nb: str, s: Session = Depends(get_db)):
+    """Full point-in-time ownership record for one customer, oldest first -
+    the data behind historical (not just current) salesman attribution.
+    Whether the caller is allowed to see this at all (admin-only, same as
+    the assign endpoint above) is the backend's job, same trusted-caller
+    contract as the rest of this router."""
+    rows = s.scalars(
+        select(CustomerOwnershipHistory)
+        .where(CustomerOwnershipHistory.cust_nb == cust_nb)
+        .order_by(CustomerOwnershipHistory.effective_from)
+    ).all()
+    return [
+        OwnershipHistoryEntryOut(
+            salesman_id=r.salesman_id, effective_from=r.effective_from,
+            effective_to=r.effective_to)
+        for r in rows
+    ]
