@@ -2,10 +2,12 @@
 data the backend's tests have always relied on - moved here from the
 backend's own seed_test.py now that these tables live here.
 
-Run against the test schema only - never against the dev database:
-
-    DATABASE_URL='postgresql+psycopg://voiceorder:changeme@localhost/voiceorder?options=-c%20search_path%3Dcatalog_test%2Cpublic' \
-        .venv/Scripts/python seed_test.py
+Run against the test schema only - never against the dev database. Uses
+app.db's engine (see app/config.py's CATALOG_SCHEMA), which always targets
+the `catalog` schema - point ALEMBIC_SCHEMA/this script at `catalog_test`
+by temporarily changing CATALOG_SCHEMA, or run it after swapping in a test
+DATABASE_URL, same as the test suite's own conftest.py does via
+schema_translate_map.
 
 Deliberately includes a few edge cases so tests have real fixtures for them:
   - C003 has no email on file

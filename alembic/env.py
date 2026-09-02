@@ -6,13 +6,18 @@ from sqlalchemy import pool
 
 from alembic import context
 
-from app.config import settings
+from app.config import CATALOG_SCHEMA, settings
 from app.models import Base
 
-# Optional: pin alembic_version to a specific schema (e.g. when migrating an
-# isolated test schema that shares a search_path with `public`). Unset for
-# normal runs - behaves exactly as before.
-version_table_schema = os.environ.get("ALEMBIC_SCHEMA")
+# This service's tables always live in a real schema, never the connection's
+# default one - `catalog` normally, or ALEMBIC_SCHEMA (e.g. `catalog_test`)
+# when migrating an isolated test schema (see tests/conftest.py). Unlike
+# Postgres' search_path, SQL Server has no per-connection schema search
+# list, so schema_translate_map below redirects every unqualified table
+# reference in the migrations themselves, not just the alembic_version
+# bookkeeping table.
+version_table_schema = os.environ.get("ALEMBIC_SCHEMA", CATALOG_SCHEMA)
+schema_translate_map = {None: version_table_schema}
 
 config = context.config
 # set_main_option() applies BasicInterpolation to '%' on every subsequent
@@ -35,6 +40,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         version_table_schema=version_table_schema,
+        schema_translate_map=schema_translate_map,
     )
 
     with context.begin_transaction():
@@ -49,6 +55,8 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        connection = connection.execution_options(
+            schema_translate_map=schema_translate_map)
         context.configure(
             connection=connection, target_metadata=target_metadata,
             version_table_schema=version_table_schema,

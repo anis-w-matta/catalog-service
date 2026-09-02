@@ -3,7 +3,7 @@ import re
 from dataclasses import asdict, dataclass
 
 from rapidfuzz import fuzz
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.config import settings
 from app.models import Item, OrderDetail, OrderHeader
@@ -185,22 +185,28 @@ class ItemResolver:
             return _exact(cands)
 
         q_fuzzy = expand_size_synonyms(normalize_text(q))
-        rows = self.s.execute(text("""
-            SELECT i.item_number, i.item_desc, i.category,
-                   similarity(i.item_desc, :q) AS score, 'fuzzy' AS method
-            FROM item i WHERE i.item_desc % :q
-            ORDER BY score DESC LIMIT 30
-        """), {"q": q_fuzzy}).all()
+        # No SQL Server equivalent of Postgres' pg_trgm `%`/similarity() -
+        # that operator/function did double duty as prefilter and score
+        # here. RapidFuzz (already the second-layer scorer below) now does
+        # both: score every catalogue item directly, keep the top 30. If
+        # catalogue size makes scoring everything too slow in practice, add
+        # a real prefilter (e.g. a SQL Server FULLTEXT index) ahead of this
+        # - not done here with no real-catalogue benchmark to size it
+        # against.
+        catalogue = self.s.execute(
+            select(Item.item_number, Item.item_desc, Item.category)).all()
+        rows = sorted(
+            ((fuzz.token_set_ratio(q_fuzzy.lower(), it.item_desc.lower()) / 100.0,
+             it.item_number, it.item_desc, it.category) for it in catalogue),
+            key=lambda r: r[0], reverse=True)[:30]
 
         hist = self._history(cust_nb) if cust_nb else set()
         best_raw: dict[str, tuple[float, str, str | None, str]] = {}
-        for r in rows:
-            rf = fuzz.token_set_ratio(q_fuzzy.lower(), r.item_desc.lower()) / 100.0
-            score = max(float(r.score), rf)
-            if r.item_number in hist:
+        for score, item_number, item_desc, category in rows:
+            if item_number in hist:
                 score = min(1.0, score + 0.10)
-            if r.item_number not in best_raw or score > best_raw[r.item_number][0]:
-                best_raw[r.item_number] = (score, r.item_desc, r.category, r.method)
+            if item_number not in best_raw or score > best_raw[item_number][0]:
+                best_raw[item_number] = (score, item_desc, category, "fuzzy")
 
         best: dict[str, Candidate] = {}
         for item_number, (score, item_desc, category, method) in best_raw.items():

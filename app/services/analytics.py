@@ -263,7 +263,7 @@ class OrdersTrendResult:
     orders_excluded_missing_commit_date: int
 
 
-_TREND_FORMATS = {"day": "YYYY-MM-DD", "month": "YYYY-MM"}
+_TREND_FORMATS = {"day": "yyyy-MM-dd", "month": "yyyy-MM"}
 
 
 def orders_trend(session: Session, f: OrdersFilter,
@@ -282,20 +282,20 @@ def orders_trend(session: Session, f: OrdersFilter,
     salesman filter, since every point on this trend structurally requires
     committed_at (unlike orders_summary/salesmen_order_metrics, which only
     need it once a date/salesman filter narrows the result). Bucket
-    boundaries computed in UTC, explicitly - this deployment's Postgres
-    session defaults to Europe/Chisinau, not UTC, so date_trunc(granularity,
-    a timestamptz) would otherwise silently shift day/month boundaries by
-    the session offset instead of using real UTC boundaries (same class of
-    bug fixed in the Python backend's app/services/analytics.py for
-    activity/request volume-over-time bucketing)."""
+    boundaries computed in UTC, explicitly - every timestamp this app
+    writes is already UTC (SYSUTCDATETIME/GETUTCDATE/
+    datetime.now(timezone.utc) - see app/db.py and the models), so FORMAT
+    needs no separate timezone-conversion step first, unlike Postgres'
+    date_trunc(granularity, timezone('UTC', a timestamptz)) this replaces
+    (same class of fix as the Python backend's app/services/analytics.py
+    for activity/request volume-over-time bucketing)."""
     if granularity not in _TREND_FORMATS:
         raise ValueError(f"unknown granularity {granularity!r}")
     excluded = _count_missing_commit_date(session, f)
     base = _details_query(f).where(OrderHeader.committed_at.is_not(None))
     sub = base.subquery()
-    bucket = func.to_char(
-        func.date_trunc(granularity, func.timezone("UTC", sub.c.committed_at)),
-        _TREND_FORMATS[granularity]).label("bucket")
+    bucket = func.format(sub.c.committed_at,
+                         _TREND_FORMATS[granularity]).label("bucket")
     rows = session.execute(
         select(bucket,
               func.count(func.distinct(_order_id_concat(sub))),
