@@ -287,6 +287,11 @@ class CustomersSummaryOut(BaseModel):
     unassigned: int
 
 
+class SalesmanCustomerCountOut(BaseModel):
+    salesman_id: str
+    current_customer_count: int
+
+
 class CustomerDetailSummaryOut(BaseModel):
     cust_nb: str
     customer_name: str

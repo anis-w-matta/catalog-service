@@ -8,7 +8,8 @@ from app.schemas.models import (CategorySummaryOut, CustomerDetailSummaryOut,
                                 DataHealthOut, HistogramBucketOut,
                                 ItemDetailSummaryOut, OrdersSummaryOut,
                                 OrdersTrendOut, RankedCustomerOut,
-                                RankedItemOut, SalesmanOrderMetricsOut,
+                                RankedItemOut, SalesmanCustomerCountOut,
+                                SalesmanOrderMetricsOut,
                                 SalesmenOrderMetricsOut, TrendPointOut)
 from app.services import analytics
 
@@ -130,6 +131,12 @@ def categories_summary(date_from: datetime | None = None,
 @router.get("/customers-summary", response_model=CustomersSummaryOut)
 def customers_summary(s=Depends(get_db)):
     return CustomersSummaryOut(**vars(analytics.customers_summary(s)))
+
+
+@router.get("/customers-per-salesman", response_model=list[SalesmanCustomerCountOut])
+def customers_per_salesman(s=Depends(get_db)):
+    r = analytics.customers_per_salesman(s)
+    return [SalesmanCustomerCountOut(**vars(x)) for x in r]
 
 
 @router.get("/customers/{cust_nb}/summary", response_model=CustomerDetailSummaryOut)

@@ -461,6 +461,38 @@ def customers_summary(session: Session) -> CustomersSummary:
 
 
 @dataclass
+class SalesmanCustomerCount:
+    salesman_id: str
+    current_customer_count: int
+
+
+def customers_per_salesman(session: Session) -> list[SalesmanCustomerCount]:
+    """Current portfolio size per salesman - COUNT(*) GROUP BY
+    customer.salesman_id. Deliberately separate from
+    salesmen_order_metrics()'s customer_count (which counts only
+    customers with an order attributed via point-in-time
+    customer_ownership_history, i.e. "customers this salesman actually
+    transacted with", zero for everyone until an order both has a
+    committed_at and a resolvable ownership record). This function
+    answers a different, current-snapshot question - "how many customers
+    is this salesman responsible for right now" - which is exactly what
+    a "workload" metric needs and is not a historical-attribution claim
+    (see docs/audit/07_historical_attribution_risks.md: that rule is
+    about not treating *current* ownership as a *historical* fact about
+    a past order - a live headcount of today's assignments is neither).
+    Excludes unassigned customers (salesman_id IS NULL) by construction -
+    nothing to attribute them to.
+    """
+    rows = session.execute(
+        select(Customer.salesman_id, func.count())
+        .where(Customer.salesman_id.is_not(None))
+        .group_by(Customer.salesman_id)
+    ).all()
+    return [SalesmanCustomerCount(salesman_id=r[0], current_customer_count=r[1])
+           for r in rows]
+
+
+@dataclass
 class CustomerDetailSummary:
     cust_nb: str
     customer_name: str

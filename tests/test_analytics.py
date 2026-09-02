@@ -334,6 +334,29 @@ class TestCustomersSummary:
         assert r.total == r.assigned + r.unassigned
 
 
+class TestCustomersPerSalesman:
+    def test_groups_by_current_assignment_excludes_unassigned(self, db_session):
+        """Distinct from salesmen_order_metrics' customer_count (which
+        needs a resolvable order attribution and is legitimately zero for
+        everyone with no committed orders) - this is a live headcount of
+        today's Customer.salesman_id, found live when the Sales page kept
+        showing 0 customers per salesman despite real assignments
+        existing."""
+        from app.models import Customer
+        db_session.add_all([
+            Customer(customer_number="CPS1", customer_name="a", salesman_id="cps_sm_a"),
+            Customer(customer_number="CPS2", customer_name="b", salesman_id="cps_sm_a"),
+            Customer(customer_number="CPS3", customer_name="c", salesman_id="cps_sm_b"),
+            Customer(customer_number="CPS4", customer_name="d", salesman_id=None),
+        ])
+        db_session.flush()
+        r = analytics.customers_per_salesman(db_session)
+        by_sm = {x.salesman_id: x.current_customer_count for x in r}
+        assert by_sm["cps_sm_a"] == 2
+        assert by_sm["cps_sm_b"] == 1
+        assert None not in by_sm
+
+
 class TestDataHealth:
     def test_qty_constraint_violations_always_zero(self, db_session):
         # Structural guarantee, not a query finding - see the docstring on
