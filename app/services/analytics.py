@@ -281,14 +281,21 @@ def orders_trend(session: Session, f: OrdersFilter,
     (counted, not silently dropped) - always counted, even with no date/
     salesman filter, since every point on this trend structurally requires
     committed_at (unlike orders_summary/salesmen_order_metrics, which only
-    need it once a date/salesman filter narrows the result)."""
+    need it once a date/salesman filter narrows the result). Bucket
+    boundaries computed in UTC, explicitly - this deployment's Postgres
+    session defaults to Europe/Chisinau, not UTC, so date_trunc(granularity,
+    a timestamptz) would otherwise silently shift day/month boundaries by
+    the session offset instead of using real UTC boundaries (same class of
+    bug fixed in the Python backend's app/services/analytics.py for
+    activity/request volume-over-time bucketing)."""
     if granularity not in _TREND_FORMATS:
         raise ValueError(f"unknown granularity {granularity!r}")
     excluded = _count_missing_commit_date(session, f)
     base = _details_query(f).where(OrderHeader.committed_at.is_not(None))
     sub = base.subquery()
-    bucket = func.to_char(func.date_trunc(granularity, sub.c.committed_at),
-                          _TREND_FORMATS[granularity]).label("bucket")
+    bucket = func.to_char(
+        func.date_trunc(granularity, func.timezone("UTC", sub.c.committed_at)),
+        _TREND_FORMATS[granularity]).label("bucket")
     rows = session.execute(
         select(bucket,
               func.count(func.distinct(_order_id_concat(sub))),

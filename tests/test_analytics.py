@@ -219,6 +219,29 @@ class TestOrdersTrend:
         assert by_bucket["2026-01-15"].item_quantity == Decimal("10")
         assert by_bucket["2026-01-16"].item_quantity == Decimal("4")
 
+    def test_day_bucket_boundary_is_utc_not_session_timezone(
+            self, db_session, customer):
+        """Day boundaries in UTC, explicitly (see the docstring on
+        analytics.orders_trend) - this deployment's Postgres session
+        defaults to Europe/Chisinau (currently UTC+3), so
+        date_trunc('day', a timestamptz) without a UTC() wrap would shift
+        an order committed late on a UTC day into the next local day's
+        bucket instead. These two commits are 30 minutes apart in UTC
+        (straddling the UTC day boundary) but >1.5 hours apart in
+        Chisinau local time."""
+        _order(db_session, "T0006", customer.customer_number,
+              committed_at=datetime(2026, 1, 15, 23, 45, tzinfo=timezone.utc),
+              lines=[(1, "I1", "10", "EACH")])
+        _order(db_session, "T0007", customer.customer_number,
+              committed_at=datetime(2026, 1, 16, 0, 15, tzinfo=timezone.utc),
+              lines=[(1, "I1", "4", "EACH")])
+        r = analytics.orders_trend(
+            db_session, analytics.OrdersFilter(cust_nb=customer.customer_number),
+            granularity="day")
+        by_bucket = {p.bucket: p for p in r.points}
+        assert by_bucket["2026-01-15"].item_quantity == Decimal("10")
+        assert by_bucket["2026-01-16"].item_quantity == Decimal("4")
+
     def test_rejects_unknown_granularity(self, db_session, customer):
         with pytest.raises(ValueError):
             analytics.orders_trend(
