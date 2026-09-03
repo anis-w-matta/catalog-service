@@ -86,3 +86,41 @@ def normalize_color(word: str | None) -> str | None:
     if low.upper() in COLOR_WORDS:
         return low.upper()
     return COLOR_SYNONYMS.get(low)
+
+
+# Lebanese/French business-account naming conventions seen in a real
+# customer catalogue import (~40k rows) - unlike SIZE_SYNONYMS/
+# COLOR_SYNONYMS (a spoken shorthand mapped to the catalogue's canonical
+# form), this noise lives in the catalogue's customer_name itself, not in
+# what a salesman says: "Mem."/"Emp." (Membre/Employe - an individual
+# account under a company) alone prefix roughly a quarter of every
+# customer in the table, and nobody ever says "Mem" out loud when naming
+# a customer. "S.A.L"/"SARL" are Lebanese/French legal-entity suffixes,
+# same story. "St"/"Saint" is the one real synonym pair here - collapsed
+# to a single token so it stops being pure noise in the fuzzy score
+# either direction. Sourced from what's actually in the data; extend as
+# new conventions turn up, same as SIZE_SYNONYMS.
+CUSTOMER_NOISE_PREFIXES = ("mem", "emp", "pat")
+CUSTOMER_LEGAL_SUFFIXES = ("sal", "sarl")
+CUSTOMER_WORD_EQUIVALENTS = {"saint": "st"}
+
+
+def normalize_customer_name(name: str) -> str:
+    """normalize_text() plus stripping the account-type/legal noise above
+    and canonicalizing st/saint - applied to BOTH the spoken query and
+    every candidate's customer_name in match_customer.py, since (unlike
+    item matching) the noise this strips lives in the catalogue data
+    itself, not just in spoken input."""
+    norm = normalize_text(name)
+    # "S.A.L"/"SARL" written with periods survive normalize_text's
+    # punctuation stripping as separate single-letter tokens ("s a l") -
+    # collapse them back before treating the whole thing as one suffix.
+    norm = re.sub(r"\bs\s*a\s*l\b", "sal", norm)
+    norm = re.sub(r"\bs\s*a\s*r\s*l\b", "sarl", norm)
+
+    tokens = [CUSTOMER_WORD_EQUIVALENTS.get(t, t) for t in norm.split()]
+    while tokens and tokens[0] in CUSTOMER_NOISE_PREFIXES:
+        tokens.pop(0)
+    while tokens and tokens[-1] in CUSTOMER_LEGAL_SUFFIXES:
+        tokens.pop()
+    return " ".join(tokens)

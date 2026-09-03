@@ -19,7 +19,7 @@ from app.config import settings
 from app.models import Customer
 from app.schemas.enums import MatchStatus
 from app.services.item_resolver import tied_with_top
-from app.services.normalization import normalize_text
+from app.services.normalization import normalize_customer_name, normalize_text
 
 
 @dataclass
@@ -46,14 +46,15 @@ def match_customer(session: Session, raw_text: str,
         return CustomerMatch(exact_nb.customer_number, exact_nb.customer_name,
                              100.0, MatchStatus.matched)
 
-    q_norm = normalize_text(query)
+    q_norm = normalize_customer_name(query)
     customers = list(session.scalars(select(Customer)))
     if not customers:
         return CustomerMatch(None, None, 0.0, MatchStatus.not_found)
 
     scored: list[tuple[str, str, float]] = []
     for c in customers:
-        name_score = fuzz.token_sort_ratio(q_norm, normalize_text(c.customer_name))
+        name_score = fuzz.token_sort_ratio(
+            q_norm, normalize_customer_name(c.customer_name))
         nb_score = (fuzz.ratio(q_norm, normalize_text(c.customer_number))
                    if c.customer_number else 0.0)
         scored.append((c.customer_number, c.customer_name,
@@ -85,11 +86,11 @@ def search_customers(session: Session, q: str, limit: int = 5
     query = (q or "").strip()
     if not query:
         return []
-    q_norm = normalize_text(query)
+    q_norm = normalize_customer_name(query)
     customers = list(session.scalars(select(Customer)))
     scored = [
         (c.customer_number, c.customer_name,
-         max(fuzz.token_sort_ratio(q_norm, normalize_text(c.customer_name)),
+         max(fuzz.token_sort_ratio(q_norm, normalize_customer_name(c.customer_name)),
              fuzz.ratio(q_norm, normalize_text(c.customer_number))
              if c.customer_number else 0.0))
         for c in customers
