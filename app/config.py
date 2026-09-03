@@ -1,11 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# This service's tables live in a dedicated `catalog` schema within the
-# same SQL Server database as the backend's own tables - see app/db.py and
-# alembic/env.py, both of which need this same value. Not env-configurable
-# on purpose: it's an architectural constant, not a per-deployment setting.
-CATALOG_SCHEMA = "catalog"
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
